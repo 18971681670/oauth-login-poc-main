@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Login POC</title>
+</head>
+<body>
+
+<script src="https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js"></script>
+<script src="https://connect.facebook.net/en_US/sdk.js"></script>
+<script src="https://accounts.google.com/gsi/client"></script>
+<script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+<script src="https://www.google.com/recaptcha/enterprise.js?render=6Ld2Uc0oAAAAAPZ20gu6dZEXFwv7O2e8tUzdL081"></script>
+<script>
+  AppleID.auth.init({
+    clientId: 'com.500px.web',
+    scope: 'name email openid',
+    redirectURI: 'https://dev.j79-stage.500px.net:3000/',
+    state: 'origin:web',
+    nonce: '500px',
+    usePopup: true
+  });
+
+  FB.init({
+    appId: '705754691432048',
+    xfbml: false,
+    version: 'v18.0'
+  });
+
+  const googleClient = google.accounts.oauth2.initTokenClient({
+    client_id: '428235857218-vl789o41q11qkeunklchon8b29d74ag1.apps.googleusercontent.com',
+    scope: 'https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid',
+    callback: async (response) => {
+      response.recaptcha_token = await grecaptcha.enterprise.execute('6Ld2Uc0oAAAAAPZ20gu6dZEXFwv7O2e8tUzdL081', {action: 'login'});
+      const accessToken = response.access_token;
+      document.getElementById('response').style.display = "block";
+      document.getElementById('provider').innerText = 'google';
+      document.getElementById('provider_response').innerText = JSON.stringify(response, null, 2);
+      await oauth2AccessToken('google', {accessToken});
+    },
+  });
+
+  const passwordLogin = async () => {
+    document.getElementById('response').style.display = "block";
+    document.getElementById('provider').innerText = 'password';
+    const recaptchaToken = await grecaptcha.enterprise.execute('6Ld2Uc0oAAAAAPZ20gu6dZEXFwv7O2e8tUzdL081', {action: 'login'});
+    await oauth2AccessToken('password', {
+      username: document.getElementById('username').value,
+      password: document.getElementById('password').value
+    });
+  };
+
+  const appleLogin = async () => {
+    const response = await AppleID.auth.signIn();
+    response.recaptcha_token = await grecaptcha.enterprise.execute('6Ld2Uc0oAAAAAPZ20gu6dZEXFwv7O2e8tUzdL081', {action: 'login'});
+    const accessToken = response.authorization.id_token;
+    document.getElementById('response').style.display = "block";
+    document.getElementById('provider').innerText = 'apple';
+    document.getElementById('provider_response').innerText = JSON.stringify(response, null, 2);
+    await oauth2AccessToken('apple', {accessToken});
+  };
+
+  const facebookLogin = async () => {
+    const response = await new Promise((resolve, reject) => {
+      FB.login((response) => {
+        if (response.status === 'connected') {
+          // Logged into your webpage and Facebook.
+          resolve(response);
+        } else {
+          // The person is not logged into your webpage or we are unable to tell.
+          reject(new Error('login failed'));
+        }
+      }, {scope: 'email openid public_profile'});
+    });
+    response.recaptcha_token = await grecaptcha.enterprise.execute('6Ld2Uc0oAAAAAPZ20gu6dZEXFwv7O2e8tUzdL081', {action: 'login'});
+    const accessToken = response.authResponse.accessToken;
+    document.getElementById('response').style.display = "block";
+    document.getElementById('provider').innerText = 'facebook';
+    document.getElementById('provider_response').innerText = JSON.stringify(response, null, 2);
+    await oauth2AccessToken('facebook', {accessToken});
+  };
+
+  const googleLogin = () => {
+    googleClient.requestAccessToken();
+  };
+
+  const oauth2AccessToken = async (provider, data) => {
+    const clientCert = 'Basic aUNhT2RCTjVzNkNuRmY2QlJoSXVpQzJvUTlNQW9MYTM4QTB5YzNjOTpwZGpJVm9YWnNyT0RYRGFGM1NwSk1mQUN2MlhtMFlseTM4RVpYRXZn';
+    let username, password;
+    switch (provider) {
+      case 'password':
+        username = data.username;
+        password = data.password;
+        break;
+      case 'apple':
+        username = 'from_apple';
+        password = data.accessToken;
+        break;
+      case 'facebook':
+        username = 'from_facebook';
+        password = data.accessToken;
+        break;
+      case 'google':
+        username = 'from_google';
+        password = data.accessToken;
+        break;
+      default:
+        break;
+    }
+    const response = await axios.post('https://api.j79-stage.500px.net/graphql', {
+      query: `{oauth2AccessToken(clientCert:"${clientCert}",username:"${username}",password:"${password}"){accessToken\nexpiresIn}}`
+    });
+
+    if (response.data.errors && response.data.errors.length > 0) {
+      document.getElementById('500px_token_cookie').innerText = response.data.errors[0].message;
+      return;
+    }
+    const {accessToken, expiresIn} = response.data.data.oauth2AccessToken;
+    // const token = accessToken.replace('{oauth2}', '');
+    const token = accessToken;
+    const expires = new Date(new Date().getTime() + (expiresIn * 1000)).toUTCString();
+    const tokenCookie = `document.cookie = 'x-500px-token=${token}; domain=.j79-stage.500px.net; path=/; expires=${expires}';`;
+    const csrfCookie = `document.cookie = 'x-csrf-token=${token}; domain=.j79-stage.500px.net; path=/; expires=${expires}';`;
+    document.getElementById('500px_token_cookie').innerText = tokenCookie;
+    document.getElementById('csrf_token_cookie').innerText = csrfCookie;
+  };
+</script>
+
+<div>
+    <label>Email or Username*</label><br>
+    <input id="username" type="text"><br>
+    <label>Password*</label><br>
+    <input id="password" type="password"><br><br>
+    <button onclick="passwordLogin()" type="button">Log in</button>
+</div>
+<br>
+<br>
+<div>
+    <button onclick="appleLogin()" type="button">Log in with Apple</button>
+</div>
+<br>
+<div>
+    <button onclick="facebookLogin()" type="button">Log in with Facebook</button>
+</div>
+<br>
+<div>
+    <button onclick="googleLogin()" type="button">Log in with Google</button>
+</div>
+<br><br>
+<div id="response" style="display: none">
+    <div>response from <span id="provider"></span> :</div>
+    <pre id="provider_response"></pre>
+    <div>set to 500px cookie:</div>
+    <pre id="500px_token_cookie"></pre>
+    <pre id="csrf_token_cookie"></pre>
+</div>
+</body>
+</html>
